@@ -1,0 +1,76 @@
+name: Build
+
+on:
+  pull_request:
+    types:
+      - opened
+    branches:
+      - main
+#  schedule:
+#    - cron: "*/10 * * * *"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions: 
+      actions: read
+      checks: read
+      contents: read
+      deployments: read
+      issues: read
+      discussions: read
+      packages: read
+      pages: read
+      pull-requests: write
+      repository-projects: read
+      security-events: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: test
+        run: bazel test --cxxopt=-std=c++14 --test_output=all //:MyValidator_test
+      # - name: Cache SonarQube packages
+      #   uses: actions/cache@v1
+      #   with:
+      #     path: ~/.sonar/cache
+      #     key: ${{ runner.os }}-sonar
+      #     restore-keys: ${{ runner.os }}-sonar
+      # - name: Cache Maven packages
+      #   uses: actions/cache@v1
+      #   with:
+      #     path: ~/.m2
+      #     key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+      #     restore-keys: ${{ runner.os }}-m2
+      # - name: Build and analyze
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      #   run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=SampleProject -Dsonar.projectName='SampleProject' -Dsonar.qualitygate.wait=true
+      # - name: Get Analysis
+      #   id: sonarqube
+      #   run:  |
+      #     echo coverage=`curl -H "Authorization: Bearer ${{ secrets.SONAR_USER_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=SampleProject&metricKeys=coverage" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+      #     echo sqale_index=`curl -H "Authorization: Bearer ${{ secrets.SONAR_USER_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=SampleProject&metricKeys=sqale_index" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+      # - name: Exec MutationTest
+      #   id: mutation
+      #   run: |
+      #     mvn test-compile org.pitest:pitest-maven:mutationCoverage > ./mutation.log
+      #     echo mutation_score=`cat ./mutation.log | grep Generated | sed -e "2,2d" | sed -E "s/^.*\((.*)\).*/\1/"`  >> "$GITHUB_OUTPUT"
+      # - name: Post COMMENT
+      #   run: |
+      #     cat << EOF > comments
+      #       ${{ steps.sonarqube.outputs.coverage }}
+      #       ${{ steps.sonarqube.outputs.sqale_index }}
+      #       ${{ steps.mutation.outputs.mutation_score }}
+      #     EOF
+      #     gh pr comment ${{ github.event.pull_request.html_url }} -F ./comments 
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Upload results
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: report
+      #     path: ./comments
