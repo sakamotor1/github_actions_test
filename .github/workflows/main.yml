@@ -30,47 +30,62 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - name: test
-        run: bazel test --cxxopt=-std=c++14 --test_output=all //:MyValidator_test
-      # - name: Cache SonarQube packages
-      #   uses: actions/cache@v1
-      #   with:
-      #     path: ~/.sonar/cache
-      #     key: ${{ runner.os }}-sonar
-      #     restore-keys: ${{ runner.os }}-sonar
-      # - name: Cache Maven packages
-      #   uses: actions/cache@v1
-      #   with:
-      #     path: ~/.m2
-      #     key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-      #     restore-keys: ${{ runner.os }}-m2
-      # - name: Build and analyze
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      #   run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=SampleProject -Dsonar.projectName='SampleProject' -Dsonar.qualitygate.wait=true
-      # - name: Get Analysis
-      #   id: sonarqube
-      #   run:  |
-      #     echo coverage=`curl -H "Authorization: Bearer ${{ secrets.SONAR_USER_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=SampleProject&metricKeys=coverage" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
-      #     echo sqale_index=`curl -H "Authorization: Bearer ${{ secrets.SONAR_USER_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=SampleProject&metricKeys=sqale_index" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
-      # - name: Exec MutationTest
-      #   id: mutation
-      #   run: |
-      #     mvn test-compile org.pitest:pitest-maven:mutationCoverage > ./mutation.log
-      #     echo mutation_score=`cat ./mutation.log | grep Generated | sed -e "2,2d" | sed -E "s/^.*\((.*)\).*/\1/"`  >> "$GITHUB_OUTPUT"
-      # - name: Post COMMENT
-      #   run: |
-      #     cat << EOF > comments
-      #       ${{ steps.sonarqube.outputs.coverage }}
-      #       ${{ steps.sonarqube.outputs.sqale_index }}
-      #       ${{ steps.mutation.outputs.mutation_score }}
-      #     EOF
-      #     gh pr comment ${{ github.event.pull_request.html_url }} -F ./comments 
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # - name: Upload results
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: report
-      #     path: ./comments
+      - name: clone bazel-sonarqube 
+        run: git clone https://github.com/Zetten/bazel-sonarqube.git
+      # - name: test
+      #   run: bazel test --cxxopt=-std=c++14 --test_output=all //:MyValidator_test
+      - name: coverage
+        run: bazel coverage --cxxopt=-std=c++14 --test_output=all --action_env=COVERAGE_GCOV_OPTIONS=-b --combined_report=lcov --coverage_report_generator=@bazel_sonarqube//:sonarqube_coverage_generator //:MyValidator_test
+      - name: cp covfile
+        run: cp bazel-out/_coverage/_coverage_report.dat .
+      - uses: sonarsource/sonarqube-scan-action@master
+        with:
+          args:
+            -Dsonar.projectKey=${{ secrets.PROJECT_KEY }}
+            -Dsonar.coverageReportPaths=_coverage_report.dat
+            -Dsonar.qualitygate.wait=true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      - name: install mull
+        run: |
+          curl -1sLf 'https://dl.cloudsmith.io/public/mull-project/mull-nightly/setup.deb.sh' | sudo -E bash
+          sudo apt-get update
+          sudo apt-get install mull-14
+      - name: generate mutation
+        run: bazel test --config=clang_config --copt="-g" --copt="-grecord-command-line" --copt="-fexperimental-new-pass-manager" --copt="-fpass-plugin=/usr/lib/mull-ir-frontend-14"  --test_output=all  //:MyValidator_test --action_env=MULL_CONFIG=${{ github.workspace }}/mull.yml
+      - name: mutation test
+        run: mull-runner-14 --reporters Elements --reporters IDE bazel-bin/MyValidator_test | tee mutation_test_output.txt
+      - name: Get mutation score
+        id: mutation_score
+        run: echo mutation_score=`cat mutation_test_output.txt | grep "Mutation score" | awk '{print $4}'` | tr -d '"' >> "$GITHUB_OUTPUT"
+      - name: Get Analysis
+        id: sonarqube
+        run:  |
+          echo coverage=`curl -u "${{ secrets.SONAR_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${{ secrets.PROJECT_KEY }}&metricKeys=coverage" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+          echo sqale_index=`curl -u "${{ secrets.SONAR_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${{ secrets.PROJECT_KEY }}&metricKeys=sqale_index" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+        # run:  |
+        #   echo coverage=`curl -H "Authorization: Bearer ${{ secrets.SONAR_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${{ secrets.PROJECT_KEY }}&metricKeys=coverage" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+        #   echo sqale_index=`curl -H "Authorization: Bearer ${{ secrets.SONAR_TOKEN }}" "${{ secrets.SONAR_HOST_URL }}/api/measures/component?component=${{ secrets.PROJECT_KEY }}&metricKeys=sqale_index" | jq ".component.measures[0].value"` | tr -d '"' >> "$GITHUB_OUTPUT"
+      - name: Post COMMENT
+        run: |
+          cat << EOF > comments
+            ${{ steps.sonarqube.outputs.coverage }}
+            ${{ steps.sonarqube.outputs.sqale_index }}
+            ${{ steps.mutation_score.outputs.mutation_score }}
+          EOF
+          gh pr comment ${{ github.event.pull_request.html_url }} -F ./comments 
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: report
+          path: ./comments
+      - name: Upload mutation test report
+        uses: actions/upload-artifact@v3
+        with:
+          name: mutation_test_report
+          path: |
+            ./*.html
+            ./*.json
